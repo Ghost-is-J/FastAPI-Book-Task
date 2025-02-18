@@ -1,0 +1,93 @@
+name: CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy Application
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Display Deployment Trigger Information
+        run: |
+          echo "🚀 Deployment triggered by a ${{ github.event_name }} event to the main branch."
+          echo "🔄 Updating the deployed API with the latest changes."
+
+      - name: Checkout Repository Code
+        uses: actions/checkout@v3
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEV_KP }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ vars.SERVER }} >> ~/.ssh/known_hosts
+          
+      - name: Connect to EC2 and Deploy API
+        run: |
+          echo "🔗 Connecting to AWS EC2 instance to deploy API."
+          ssh -i ~/.ssh/id_rsa ${{ vars.USER }}@${{ vars.SERVER }} << 'EOF'
+            set -e  # Exit on error
+            
+            # Update packages
+            echo "*** 📂 Updating package lists ***"
+            sudo apt update && sudo apt upgrade -y
+
+            # Install necessary packages
+            echo "*** 📦 Installing dependencies ***"
+            sudo apt install -y nginx git python3 python3-pip python3-venv
+
+            # Clone or update the repository
+            cd ~
+            if [ -d "hng12-stage2" ]; then
+                echo "*** 🔄 Pulling latest changes from repository. ***"
+                cd hng12-stage2
+                git reset --hard
+                git pull origin main
+            else
+                echo "*** 📂 Cloning repository for the first time. ***"
+                git clone https://github.com/Ghost-is-J/FastAPI-Book-Task
+                cd hng12-stage2
+            fi
+
+            # Set up virtual environment and install dependencies
+            echo "*** 📦 Setting up virtual environment... ***"
+            python3 -m venv venv
+            source venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+            # Configure a systemd service for FastAPI
+            echo "*** 🛠 Configure systemd service for FastAPI... ***"
+            sudo cp fastapi.service /etc/systemd/system/fastapi.service
+
+            # Configure Nginx as a reverse proxy
+            echo "*** 🛠 Configuring Nginx... ***"
+            sudo cp default /etc/nginx/sites-available/default
+            
+            # Enable the Nginx configuration
+            sudo ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
+            sudo systemctl restart nginx
+
+            # Open firewall ports
+            # echo "*** 🛠 Allowing necessary ports through UFW... ***"
+            # sudo ufw allow 'Nginx Full'
+            # sudo ufw allow 8000
+            # sudo ufw enable
+
+            # Reload systemd, enable and start FastAPI service
+            echo "*** 🔄 Starting FastAPI service... ***"
+            sudo systemctl daemon-reload
+            sudo systemctl enable fastapi
+            sudo systemctl restart fastapi
+
+            # Display status
+            echo "*** 🚀 Deployment completed! ***"
+            sudo systemctl status fastapi --no-pager
+          EOF
+
+      - name: Confirm Deployment Status
+        run: echo "
